@@ -1,0 +1,5 @@
+FROM cosmtrek/air:v1.44.0
+WORKDIR /app
+COPY . .
+RUN go mod tidy
+CMD ["go", "run", "cmd/main.go"]

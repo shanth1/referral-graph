@@ -1,0 +1,107 @@
+version: "3.8"
+
+services:
+    # 1. Reverse Proxy
+    proxy:
+        image: traefik:v2.9
+        container_name: "traefik_proxy"
+        command:
+            - "--api.insecure=true"
+            - "--providers.docker=true"
+            - "--providers.docker.exposedbydefault=false"
+            - "--entrypoints.web.address=:80"
+            - "--entrypoints.websecure.address=:443"
+            - "--providers.file.directory=/etc/traefik/config"
+            - "--providers.file.watch=true"
+        ports:
+            - "80:80"
+            - "443:443"
+            - "8081:8080" # Traefik Dashboard
+        volumes:
+            - /var/run/docker.sock:/var/run/docker.sock:ro
+            - ./infra/traefik/traefik.yml:/traefik.yml
+            - ./infra/traefik/config:/etc/traefik/config
+        networks:
+            - app-net
+
+    # 2. Backend Service (Go)
+    backend:
+        build:
+            context: ./backend
+            dockerfile: Dockerfile.dev
+        container_name: "backend_service"
+        volumes:
+            - ./backend:/app
+        env_file:
+            - .env
+        labels:
+            - "traefik.enable=true"
+            - "traefik.http.routers.backend.rule=Host(`api.myapp.local`)"
+            - "traefik.http.routers.backend.entrypoints=web"
+            - "traefik.http.services.backend.loadbalancer.server.port=8080"
+        depends_on:
+            - neo4j
+            - redis
+        networks:
+            - app-net
+
+    # 3. Frontend: Production App
+    frontend-app:
+        build:
+            context: ./frontend/app
+            dockerfile: Dockerfile
+        container_name: "frontend_app"
+        volumes:
+            - ./frontend/app:/app
+            - /app/node_modules
+        labels:
+            - "traefik.enable=true"
+            - "traefik.http.routers.frontend-app.rule=Host(`app.myapp.local`)"
+            - "traefik.http.routers.frontend-app.entrypoints=web"
+            - "traefik.http.services.frontend-app.loadbalancer.server.port=5173"
+        networks:
+            - app-net
+
+    # 4. Frontend: Playground
+    frontend-playground:
+        build:
+            context: ./frontend/playground
+            dockerfile: Dockerfile
+        container_name: "frontend_playground"
+        volumes:
+            - ./frontend/playground:/app
+            - /app/node_modules
+        labels:
+            - "traefik.enable=true"
+            - "traefik.http.routers.frontend-playground.rule=Host(`playground.myapp.local`)"
+            - "traefik.http.routers.frontend-playground.entrypoints=web"
+            - "traefik.http.services.frontend-playground.loadbalancer.server.port=5174"
+        networks:
+            - app-net
+
+    # 5. Databases & Cache
+    neo4j:
+        image: neo4j:4.4
+        container_name: "neo4j_db"
+        ports:
+            - "7474:7474" # Neo4j Browser
+            - "7687:7687" # Bolt protocol
+        volumes:
+            - neo4j-data:/data
+        environment:
+            - NEO4J_AUTH=neo4j/secretpassword # WARNING: prod mode
+        networks:
+            - app-net
+
+    redis:
+        image: redis:6.2-alpine
+        container_name: "redis_cache"
+        networks:
+            - app-net
+
+networks:
+    app-net:
+        driver: bridge
+
+volumes:
+    neo4j-data:
